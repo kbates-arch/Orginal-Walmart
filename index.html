@@ -50,6 +50,7 @@ button{font:inherit;cursor:pointer}
 .note{font-size:11px;color:#9fb0bb;margin-top:6px;line-height:1.35}
 .toggle{display:flex;align-items:center;gap:8px;font-size:12.5px}
 /* ---------- kiosk hardware ---------- */
+.tapfx{position:absolute;width:70px;height:70px;margin:-35px 0 0 -35px;border-radius:50%;pointer-events:none;z-index:2147483000;background:radial-gradient(circle,rgba(255,225,0,.95) 0%,rgba(255,200,0,.6) 55%,rgba(255,200,0,0) 75%);border:4px solid #FFB800;box-shadow:0 0 14px 4px rgba(255,184,0,.8);animation:tapfx .8s ease-out forwards}@keyframes tapfx{0%{transform:scale(.5);opacity:1}60%{opacity:1}100%{transform:scale(1.5);opacity:0}}
 #kiosk{position:absolute;left:0;top:0;width:1060px;height:990px;transform-origin:0 0}
 .bezel{position:absolute;left:0;top:0;width:1060px;height:830px;background:#14171a;border-radius:28px;box-shadow:0 20px 50px #0008}
 .camlens{position:absolute;left:508px;top:-26px;width:44px;height:30px;background:#16191c;border-radius:6px 6px 0 0}
@@ -218,10 +219,16 @@ button{font:inherit;cursor:pointer}
       <select id="scen"></select>
       <div class="scen" id="scenTxt"></div>
       <div class="row2"><label class="toggle"><input type="checkbox" id="tAuto" checked style="width:auto"> Stop the timer when the task succeeds</label></div>
+      <div class="row2"><label class="toggle"><input type="checkbox" id="recOn" style="width:auto"> Record the screen for each task</label></div>
+      <div class="row2"><label class="toggle"><input type="checkbox" id="recMic" style="width:auto"> Include the microphone</label></div>
+      <div class="row2"><label class="toggle"><input type="checkbox" id="recAll" style="width:auto"> Record the whole page (adds the camera view)</label></div>
+      <div class="row2"><label class="toggle"><input type="checkbox" id="tapFx" style="width:auto"> Show a glow where the screen is tapped</label></div>
+      <div class="scen" id="recSt" style="font-size:12px">Recording is off.</div>
+      <div class="row2"><button class="btn go" id="bGo">Start now (S)</button></div>
       <div class="row2"><button class="btn go" id="bStart">Reset &amp; get ready</button><button class="btn stop" id="bEnd">End task</button></div>
       <div class="row2"><button class="btn" id="bReset" style="display:none">Reset kiosk</button><button class="btn" id="bCsv">Download CSV</button></div>
       <div class="row2"><button class="btn go" id="bCopy">Copy row for Google Sheets</button></div>
-      <div class="note" id="copyMsg">After a task ends, copy it, then paste into column E of the matching row on the “A-B Test” sheet.</div>
+      <div class="note" id="copyMsg">After a task ends, copy it, then paste into the “Task completed” cell (column E) of the matching row on the “A-B Test” sheet.</div>
     </div>
     <div class="card">
       <div class="metrics">
@@ -285,7 +292,7 @@ const LOOKUP=[
 const BAG={id:'bag',full:'STORE BAG',short:'Store bag',price:.10};   /* $0.10 each, same as the redesign */
 /* Same scenarios and wording as the redesign. label = the name used on the A-B Test sheet. */
 const SCN=[
- {id:'S01',label:'S01 Golden path',t:'Golden path (scan & pay)',say:'You’re buying a few groceries. Scan the Patrimini, the Sbr and the Naan Dip, then pay with your card and get a text receipt.',need:'Cards: Patrimini, Sbr, Naan Dip. Ends when payment is approved.',end:'pay'},
+ {id:'S01',label:'S01 Golden path',t:'Golden path (scan & pay)',say:'You’re buying a few groceries. Scan the Patrimini, the Sbr and the Naan Dip, then pay with your card.',need:'Cards: Patrimini, Sbr, Naan Dip. Ends when payment is approved.',end:'pay'},
  {id:'S02',label:'S02 Add bags',t:'Add bags',say:'You’re buying a Sbr, but you didn’t bring a bag. Add two store bags to your order, then pay with your card.',need:'Cards: Sbr. Bags are under the “···” button. Ends when payment is approved.',end:'pay'},
  {id:'S03',label:'S03 Look up item',t:'Look up an item',say:'You’re buying 2 plantains. They don’t have a barcode. Add them to your order.',need:'No card needed. Ends when an item is added from Look up.',end:'lookup',startOn:'tap'},
  {id:'S04',label:'S04 Use a coupon',t:'Use a coupon',say:'You have a coupon for the Naan Dip. Scan the Naan Dip and use your coupon.',need:'Cards: Naan Dip, Coupon. Ends when the coupon is applied.',end:'coupon'},
@@ -577,7 +584,11 @@ function ledFlash(ok){const g=$('#glass');g.classList.add(ok?'flash':'bad');setT
 function addLine(name,price,qty,extra){S.cart.push(Object.assign({id:uid++,name,price,qty:qty||1,v:false},extra||{}));S.keepBottom=true}
 function waitStart(){if(task.running&&!task.waiting){task.waiting=true;task.aT=now()}}
 function waitEnd(){if(task.waiting){task.wait+=now()-task.aT;task.waiting=false}}
-function payDone(){if(task.running&&task.auto&&task.scn&&task.scn.id==='S07'&&S.cart.filter(l=>!l.v&&!l.coupon&&l.name==='Sf Naan Dip').length>1){log('paid_with_duplicate','');finish('ended: paid with duplicate')}else done('pay')}
+const EXP={S01:{'Patrimini12':1,'Sbr 8oz Clas':1,'Sf Naan Dip':1},S02:{'Sbr 8oz Clas':1,'Store bag':2},S07:{'Sf Naan Dip':1},S09:{'Red wine 750 ml':1,'Sbr 8oz Clas':1}};
+/* what is in the cart (not removed) compared with what the scenario asked for; '' = exactly right */
+function cartDiff(){const e=EXP[task.scn&&task.scn.id];if(!e)return '';const got={};let coup=false;S.cart.forEach(l=>{if(l.v)return;if(l.coupon){coup=true;return}got[l.name]=(got[l.name]||0)+l.qty});
+  const bad=[];Object.keys(got).forEach(k=>{if((e[k]||0)!==got[k])bad.push(k+' x'+got[k]+' (asked for '+(e[k]||0)+')')});Object.keys(e).forEach(k=>{if(!got[k])bad.push(k+' missing')});if(coup)bad.push('coupon applied');return bad.join('; ')}
+function payDone(){if(task.running&&task.auto&&task.scn&&EXP[task.scn.id]){const d=cartDiff();if(d){const dup=task.scn.id==='S07'&&S.cart.filter(l=>!l.v&&!l.coupon&&l.name==='Sf Naan Dip').length>1;log(dup?'paid_with_duplicate':'paid_with_wrong_items',d);finish(dup?'ended: paid with duplicate':'ended: paid with wrong items');return}}done('pay')}
 function done(evt){if(task.running&&task.auto&&task.scn&&task.scn.end===evt)finish('success: '+evt)}
 function scanErr(why){ledFlash(false);buzz();bump('errs');log('scan_error',why)}
 function scanLocked(name){return (S.modal||S.screen==='pay'||S.screen==='thanks')?(log('scan_ignored',name+' ('+(S.modal||S.screen)+')'),true):false}
@@ -615,7 +626,7 @@ $('#manBtns').onclick=e=>{const b=e.target.closest('[data-scan]');if(!b)return;l
 /* ---------- screen taps ---------- */
 $('#screen').addEventListener('click',e=>{
   const el=e.target.closest('[data-act]');
-  if(task.armed&&task.scn&&task.scn.startOn==='tap')autoStart();
+  if(task.armed&&task.scn)autoStart();
   if(!el){bump('miss');log('missed_tap');return}
   bump('taps');
   act(el.dataset.act,el.dataset);
@@ -675,12 +686,77 @@ $('#bDup').onclick=()=>{
   $('#bDup').blur();
 };
 const curScn=()=>{const i=$('#scen').selectedIndex;return i<1?null:SCN[i-1]};
-function showScn(){const s=curScn();$('#scenTxt').innerHTML=s?'“'+s.say+'”<br><span style="color:#9fb0bb">'+s.need+(s.startOn==='tap'?' The timer starts at the first tap on the screen.':' The timer starts at the first scan.')+'</span>':'Practice: nothing is timed, counted or saved. Let the participant try the scanner and the screen. Pick a scenario when you are ready.'}
+function showScn(){const s=curScn();$('#scenTxt').innerHTML=s?'“'+s.say+'”<br><span style="color:#9fb0bb">'+s.need+' The timer starts at the first touch of the kiosk screen or the first scan, or when you press Start now (S).'+'</span>':'Practice: nothing is timed, counted or saved. Let the participant try the scanner and the screen. Pick a scenario when you are ready.'}
 $('#scen').innerHTML='<option>Practice · nothing is tracked</option>'+SCN.map(s=>`<option>${s.id} · ${s.t}</option>`).join('');
 /* pick a scenario = the kiosk resets and waits; the timer starts by itself at the first scan (or first tap for “Look up”) */
+/*__GLOW__*//* ---- optional tap glow, so a recording shows where the screen was touched ---- */
+(function(){var on=false;
+ function init(){var k=document.getElementById('kiosk'),cb=document.getElementById('tapFx');if(!k||!cb)return;
+  cb.addEventListener('change',function(){on=cb.checked;cb.blur()});
+  k.addEventListener('pointerdown',function(e){
+   if(!on)return;var r=k.getBoundingClientRect(),sx=k.offsetWidth/r.width,sy=k.offsetHeight/r.height;
+   var d=document.createElement('div');d.className='tapfx';d.style.left=((e.clientX-r.left)*sx)+'px';d.style.top=((e.clientY-r.top)*sy)+'px';
+   k.appendChild(d);setTimeout(function(){if(d.parentNode)d.parentNode.removeChild(d)},900)},true);}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+/* ---- optional screen recording of each task (stays on this computer) ---- */
+var REC=(function(){
+  var st={stream:null,clip:null,mic:false,cropEl:null};
+  var ok=!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia&&window.MediaRecorder);
+  function say(t){var e=document.getElementById('recSt');if(e)e.textContent=t}
+  function pickType(){var c=['video/mp4;codecs=avc1','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];for(var i=0;i<c.length;i++){try{if(MediaRecorder.isTypeSupported(c[i]))return c[i]}catch(e){}}return ''}
+  function begin(){
+    if(!st.stream||!st.stream.active)return;
+    var type=pickType(),mr;
+    try{mr=new MediaRecorder(st.stream,type?{mimeType:type,videoBitsPerSecond:2500000}:{})}catch(e){say('Could not start recording: '+e.message);return}
+    var clip={mr:mr,chunks:[],t0:Date.now(),ending:false,type:mr.mimeType||type||'video/webm'};
+    mr.ondataavailable=function(e){if(e.data&&e.data.size)clip.chunks.push(e.data)};
+    mr.start(1000);st.clip=clip;say('● Recording this task…');
+  }
+  function drop(){var c=st.clip;st.clip=null;if(c&&c.mr&&c.mr.state!=='inactive'){c.mr.onstop=null;try{c.mr.stop()}catch(e){}}}
+  function save(c,name){
+    if(!c||!c.mr)return;
+    c.mr.onstop=function(){
+      var blob=new Blob(c.chunks,{type:c.type}),a=document.createElement('a'),f=name+'.'+(c.type.indexOf('mp4')>=0?'mp4':'webm');
+      a.href=URL.createObjectURL(blob);a.download=f;document.body.appendChild(a);a.click();
+      setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},5000);say('Saved to Downloads: '+f);
+    };
+    try{c.mr.stop()}catch(e){}
+  }
+  function stamp(){var d=new Date(),p=function(n){return String(n).padStart(2,'0')};return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds())}
+  return {
+    supported:ok,
+    active:function(){return !!(st.clip&&st.clip.mr&&st.clip.mr.state==='recording')},
+    on:function(){return !!(st.stream&&st.stream.active)},
+    offset:function(){return st.clip?((Date.now()-st.clip.t0)/1000).toFixed(1):''},
+    enable:async function(wantMic,cropEl,ready){
+      if(!ok){say('This browser cannot record the screen. Use Chrome.');return false}
+      try{
+        var ds=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false,preferCurrentTab:true,selfBrowserSurface:'include',surfaceSwitching:'exclude',systemAudio:'exclude'});
+        var vt=ds.getVideoTracks()[0];
+        try{if(cropEl&&window.CropTarget&&vt.cropTo){await vt.cropTo(await CropTarget.fromElement(cropEl))}}catch(e){}
+        if(wantMic){try{var m=await navigator.mediaDevices.getUserMedia({audio:true});m.getAudioTracks().forEach(function(t){ds.addTrack(t)})}catch(e){say('Microphone not allowed; recording the screen only.')}}
+        st.stream=ds;vt.onended=function(){drop();st.stream=null;var b=document.getElementById('recOn');if(b)b.checked=false;say('Recording stopped (sharing ended).')};
+        say('Recording is ready: each task is recorded and saved when it ends.');if(ready)ready();return true;
+      }catch(e){say('Recording was not allowed ('+(e&&e.name||'error')+').');return false}
+    },
+    disable:function(){drop();if(st.stream){st.stream.getTracks().forEach(function(t){t.stop()});st.stream=null}say('Recording is off.')},
+    /* scenario chosen or reset: keep a clip that just ended, throw away one that never started */
+    onArm:function(hasScn){
+      var c=st.clip;
+      if(c&&c.ending){st.clip=null;save(c,c.name)}else drop();
+      if(hasScn&&REC.on())begin();else if(REC.on())say('Practice: not recording.');
+    },
+    onEnd:function(pid,sid,ver){
+      var c=st.clip;if(!c||c.ending)return;
+      c.ending=true;c.name=String(pid||'P').replace(/[^A-Za-z0-9_-]/g,'_')+'_'+ver+'_'+String(sid||'S').replace(/[^A-Za-z0-9_-]/g,'_')+'_'+stamp();
+      setTimeout(function(){if(st.clip===c){st.clip=null;save(c,c.name)}},2000);
+    }
+  };
+})();
 function arm(){
   if(task.running)finish('restarted');
-  fresh();const sc=curScn();
+  fresh();const sc=curScn();REC.onArm(!!sc);
   Object.assign(task,{autoDup:false,running:false,armed:!!sc,t0:0,dur:0,taps:0,miss:0,scans:0,errs:0,help:0,wait:0,aT:0,waiting:false,success:false,scn:sc});
   render();
 }
@@ -688,8 +764,11 @@ function autoStart(){
   if(!task.armed||task.running)return;
   Object.assign(task,{armed:false,running:true,t0:now(),pid:($('#pid').value||'').trim()||'P?'});
   log('task_start',task.scn.id+' '+task.scn.t);
+  if(REC.active())log('recording',REC.offset()+' s into the video');
 }
 $('#scen').onchange=()=>{showScn();arm();$('#scen').blur()};showScn();
+$('#recAll').onchange=e=>{const o=$('#recOn');if(o.checked){REC.disable();o.checked=false;o.click()}e.target.blur()};
+$('#recOn').onchange=e=>{const b=e.target;if(b.checked){REC.enable($('#recMic').checked,$('#recAll').checked?null:$('#kiosk'),()=>{if(task.armed||task.running)REC.onArm(true)}).then(ok=>{if(!ok)b.checked=false})}else REC.disable();b.blur()};
 $('#tAuto').onchange=e=>{task.auto=e.target.checked;e.target.blur()};
 $('#bStart').onclick=()=>{arm();$('#bStart').blur()};
 function finish(why){
@@ -697,7 +776,9 @@ function finish(why){
   waitEnd();task.dur=now()-task.t0;
   log('task_end',why||'manual',{time:(task.dur/1000).toFixed(2),taps:task.taps,missed:task.miss,scans:task.scans,errors:task.errs,help:task.help,wait:(task.wait/1000).toFixed(2)});
   task.running=false;task.success=String(why).indexOf('success')===0;
+  REC.onEnd(task.pid,task.scn&&task.scn.id,'A');
 }
+$('#bGo').onclick=()=>{if(task.armed){autoStart();log('facilitator','start now')}$('#bGo').blur()};
 $('#bEnd').onclick=()=>{finish('manual');$('#bEnd').blur()};
 $('#bReset').onclick=()=>{fresh();log('kiosk_reset');render();$('#bReset').blur()};
 function csv(){
@@ -714,22 +795,22 @@ $('#bCsv').onclick=()=>{
 function sheetRow(){
   const r=LOG.slice().reverse().find(x=>x.e==='task_end');if(!r)return null;
   const sc=SCN.find(x=>r.s.indexOf(x.id+' ')===0);
-  return [r.p,'A','',sc?sc.label:r.s,String(r.d).indexOf('success')===0?'Y':(String(r.d).indexOf('paid with duplicate')>=0?'N':''),r.time,r.taps,r.missed,r.errors,'','','','',r.help,r.wait];
+  return [r.p,'A','',sc?sc.label:r.s,String(r.d).indexOf('success')===0?'Y':(String(r.d).indexOf('paid with')>=0?'N':''),r.time,r.taps,r.missed,r.errors,'','','','',r.help,r.wait];
 }
 $('#bCopy').onclick=async()=>{
   const row=sheetRow(),m=$('#copyMsg');
   if(!row){m.textContent='Finish a task first (it ends by itself when the task succeeds).';return}
   const tsv=row.slice(4).join('\t');
   try{await navigator.clipboard.writeText(tsv)}catch(e){const ta=document.createElement('textarea');ta.value=tsv;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e2){}ta.remove()}
-  m.textContent='Copied for '+row[0]+' · '+row[1]+' · '+row[3]+'. On “A-B Test”, click column E of that row and paste.';$('#bCopy').blur();
+  m.textContent='Copied for '+row[0]+' · '+row[1]+' · '+row[3]+'. On “A-B Test”, click the “Task completed” cell (column E) of that row and paste.';$('#bCopy').blur();
 };
 setInterval(()=>{
-  const t=task.running?now()-task.t0:task.dur;$('#mTime').textContent=(t/1000).toFixed(1)+'s';$('#mTaps').textContent=task.taps;$('#mMiss').textContent=task.miss;$('#mScan').textContent=task.scans;$('#mErr').textContent=task.errs;$('#mHelp').textContent=task.help;
+  $('#bGo').disabled=!task.armed;$('#bGo').style.opacity=task.armed?1:.45;const t=task.running?now()-task.t0:task.dur;$('#mTime').textContent=(t/1000).toFixed(1)+'s';$('#mTaps').textContent=task.taps;$('#mMiss').textContent=task.miss;$('#mScan').textContent=task.scans;$('#mErr').textContent=task.errs;$('#mHelp').textContent=task.help;
   const w=task.wait+(task.waiting&&task.running?now()-task.aT:0);$('#mWait').textContent=(w/1000).toFixed(1)+'s';
-  $('#mRes').textContent=task.running?'running…':(task.armed?'ready: waits for first '+(task.scn.startOn==='tap'?'tap':'scan'):(task.scn?(task.success?'success':'ended'):'practice'));
+  $('#mRes').textContent=task.running?'running…':(task.armed?'ready: waits for first touch or scan':(task.scn?(task.success?'success':'ended'):'practice'));
 },100);
 document.addEventListener('keydown',e=>{const ae=document.activeElement;if(/INPUT|SELECT|TEXTAREA/.test(ae.tagName)&&ae.type!=='checkbox')return;
-  if(e.key==='a'||e.key==='A')approve();if(e.key==='p'||e.key==='P')phoneScan();if(e.key==='f'||e.key==='F'){$('#facPane').classList.toggle('hidden');fit()}});
+  if(e.key==='a'||e.key==='A')approve();if((e.key==='s'||e.key==='S')&&task.armed){autoStart();log('facilitator','start now')}if(e.key==='p'||e.key==='P')phoneScan();if(e.key==='f'||e.key==='F'){$('#facPane').classList.toggle('hidden');fit()}});
 
 /* ---------- scale kiosk to fit ---------- */
 function fit(){const st=$('#stage');const s=Math.min((st.clientWidth-16)/KW,(st.clientHeight-44)/KH);const k=$('#kiosk');k.style.transform=`scale(${s})`;
